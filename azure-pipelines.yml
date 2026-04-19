@@ -1,0 +1,92 @@
+trigger:
+  branches:
+    include:
+      - develop
+      - main
+
+stages:
+
+  # ─── BUILD ────────────────────────────────────────────────
+  - stage: Build
+    jobs:
+      - job: BuildJob
+        pool:
+          vmImage: 'ubuntu-latest'
+        steps:
+          - task: CopyFiles@2
+            inputs:
+              SourceFolder: '$(System.DefaultWorkingDirectory)'
+              Contents: '**'
+              TargetFolder: '$(Build.ArtifactStagingDirectory)'
+
+          - publish: $(Build.ArtifactStagingDirectory)
+            artifact: drop
+
+  # ─── DEV (auto on develop push) ───────────────────────────
+  - stage: DeployDev
+    dependsOn: Build
+    condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/develop'))
+    jobs:
+      - deployment: DeployToDev
+        environment: 'dev'
+        pool:
+          vmImage: 'ubuntu-latest'
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - script: |
+                    echo "window.APP_ENV = 'development';" > $(Pipeline.Workspace)/drop/env-config.js
+                  displayName: 'Set DEV environment config'
+
+                - task: AzureStaticWebApp@0
+                  inputs:
+                    azure_static_web_apps_api_token: $(AZURE_STATIC_WEB_APPS_API_TOKEN_DEV)
+                    app_location: '$(Pipeline.Workspace)/drop'
+                    skip_api_build: true
+
+  # ─── UAT (manual approval gate) ───────────────────────────
+  - stage: DeployUAT
+    dependsOn: DeployDev
+    condition: succeeded()
+    jobs:
+      - deployment: DeployToUAT
+        environment: 'uat'
+        pool:
+          vmImage: 'ubuntu-latest'
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - script: |
+                    echo "window.APP_ENV = 'uat';" > $(Pipeline.Workspace)/drop/env-config.js
+                  displayName: 'Set UAT environment config'
+
+                - task: AzureStaticWebApp@0
+                  inputs:
+                    azure_static_web_apps_api_token: $(AZURE_STATIC_WEB_APPS_API_TOKEN_UAT)
+                    app_location: '$(Pipeline.Workspace)/drop'
+                    skip_api_build: true
+
+  # ─── PROD (only from master) ──────────────────────────────
+  - stage: DeployProd
+    dependsOn: Build
+    condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/master'))
+    jobs:
+      - deployment: DeployToProd
+        environment: 'prod'
+        pool:
+          vmImage: 'ubuntu-latest'
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - script: |
+                    echo "window.APP_ENV = 'production';" > $(Pipeline.Workspace)/drop/env-config.js
+                  displayName: 'Set PROD environment config'
+
+                - task: AzureStaticWebApp@0
+                  inputs:
+                    azure_static_web_apps_api_token: $(AZURE_STATIC_WEB_APPS_API_TOKEN_PROD)
+                    app_location: '$(Pipeline.Workspace)/drop'
+                    skip_api_build: true
